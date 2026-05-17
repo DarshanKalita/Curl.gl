@@ -15,17 +15,25 @@
         #info { position: absolute; top: 10px; left: 10px; z-index: 10; padding: 15px; background: rgba(5, 16, 36, 0.85); border: 1px solid #334; border-radius: 4px; pointer-events: none; }
         .axes-legend { margin-top: 10px; font-size: 11px; }
         
-        #math-render-panel { position: absolute; bottom: 20px; left: 10px; background: rgba(5, 16, 36, 0.9); border: 1px solid #445; padding: 15px; border-radius: 6px; font-size: 16px; min-width: 300px; pointer-events: none; }
+        #math-render-panel { position: absolute; bottom: 20px; left: 10px; background: rgba(5, 16, 36, 0.9); border: 1px solid #445; padding: 15px; border-radius: 6px; font-size: 16px; min-width: 300px; pointer-events: auto; }
         .math-row { margin-bottom: 8px; }
-        .math-label { color: #88aaff; font-weight: bold; font-size: 12px; margin-bottom: 2px; }
+        .math-label { color: #88aaff; font-weight: bold; font-size: 12px; margin-bottom: 8px; }
+        
+        #randomize-btn { 
+            width: 100%; margin-top: 10px; padding: 8px; 
+            background: #223355; color: #fff; border: 1px solid #4466aa; 
+            border-radius: 4px; cursor: pointer; font-family: monospace; font-weight: bold;
+            transition: background 0.2s;
+        }
+        #randomize-btn:hover { background: #334477; }
     </style>
 </head>
 <body>
     <div id="info">
         <strong>Paddlewheel: Field Explorer</strong><br>
         • Hover on canvas to spawn particles interactively.<br>
-        • Blue: Global Field Flow (A)<br>
-        • Red: Global Curl Flow (∇ × A)<br>
+        • Primary Flow: Global Field (A)<br>
+        • Red Flow: Global Curl (∇ × A)<br>
         <div class="axes-legend">
             <span style="color:#ff5555">■ X Axis</span> | <span style="color:#55ff55">■ Y Axis</span> | <span style="color:#5555ff">■ Z Axis</span>
         </div>
@@ -36,6 +44,7 @@
         <div id="latex-x" class="math-row"></div>
         <div id="latex-y" class="math-row"></div>
         <div id="latex-z" class="math-row"></div>
+        <button id="randomize-btn">🎲 Randomize Field</button>
     </div>
 
     <div id="canvas-container"></div>
@@ -55,7 +64,6 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { GUI } from 'lil-gui';
 
-        // 1. Core Renderer
         const container = document.getElementById('canvas-container');
         const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -72,7 +80,6 @@
         controls.enableDamping = true;
         controls.zoomSpeed = 2.0;
 
-        // 2. Accumulation Fade Plane
         const fadeScene = new THREE.Scene();
         const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
         const fadePlane = new THREE.Mesh(
@@ -81,7 +88,6 @@
         );
         fadeScene.add(fadePlane);
 
-        // 3. Environment Group
         const environmentGroup = new THREE.Group();
         scene.add(environmentGroup);
         
@@ -104,16 +110,22 @@
         environmentGroup.add(createTextSprite('Y', '#55ff55').translateOnAxis(new THREE.Vector3(0,1,0), 10.5));
         environmentGroup.add(createTextSprite('Z', '#5555ff').translateOnAxis(new THREE.Vector3(0,0,1), 10.5));
 
-        // 4. Mathematical Engine (With Pre-calculated Scales and Timesteps)
         let currentFieldFunc;
         const presets = {
-            'Thomas Attractor': { x: 'sin(y) - 0.19*x', y: 'sin(z) - 0.19*y', z: 'sin(x) - 0.19*z', scale: 0.25, speed: 0.4 },
-            'Lorenz Attractor': { x: '10*(y-x)', y: 'x*(28-z)-y', z: 'x*y - (8/3)*z', scale: 1.5, speed: 0.015 },
-            'Aizawa Attractor': { x: '(z-0.7)*x - 3.5*y', y: '3.5*x + (z-0.7)*y', z: '0.6 + 0.95*z - (z^3)/3 - (x^2+y^2)*(1+0.25*z) + 0.1*z*(x^3)', scale: 0.1, speed: 0.06 },
-            'Tornado (Z-axis curl)': { x: '-y', y: 'x', z: '0.1*z', scale: 1.0, speed: 0.2 },
-            'Horizontal Shear': { x: 'z', y: '0', z: '0', scale: 1.0, speed: 0.2 },
-            'Magnetic Dipole': { x: '3*x*z/pow(x*x+y*y+z*z, 2.5)', y: '3*y*z/pow(x*x+y*y+z*z, 2.5)', z: '(2*z*z-x*x-y*y)/pow(x*x+y*y+z*z, 2.5)', scale: 0.15, speed: 0.005 },
-            'ABC Flow': { x: 'sin(z) + cos(y)', y: 'sin(x) + cos(z)', z: 'sin(y) + cos(x)', scale: 0.5, speed: 0.2 }
+            'Thomas Attractor': { x: 'sin(y) - 0.19*x', y: 'sin(z) - 0.19*y', z: 'sin(x) - 0.19*z', scale: 0.25, speed: 0.4, spread: 20, center: [0,0,0] },
+            'Lorenz Attractor': { x: '10*(y-x)', y: 'x*(28-z)-y', z: 'x*y - (8/3)*z', scale: 1.5, speed: 0.015, spread: 20, center: [0,0,15] },
+            'Aizawa Attractor': { x: '(z-0.7)*x - 3.5*y', y: '3.5*x + (z-0.7)*y', z: '0.6 + 0.95*z - (z^3)/3 - (x^2+y^2)*(1+0.25*z) + 0.1*z*(x^3)', scale: 0.1, speed: 0.06, spread: 10, center: [0,0,5] },
+            'Halvorsen Attractor': { x: '-1.4*x - 4*y - 4*z - y^2', y: '-1.4*y - 4*z - 4*x - z^2', z: '-1.4*z - 4*x - 4*y - x^2', scale: 0.5, speed: 0.02, spread: 25, center: [0,0,0] },
+            'Rössler Attractor': { x: '-y - z', y: 'x + 0.2*y', z: '0.2 + z*(x - 5.7)', scale: 1.0, speed: 0.05, spread: 30, center: [0,0,0] },
+            'Chen Attractor': { x: '40*(y-x)', y: '-12*x - x*z + 28*y', z: 'x*y - 3*z', scale: 2.0, speed: 0.005, spread: 20, center: [0,0,0] },
+            'Rabinovich-Fabrikant Attractor': { x: 'y*(z - 1 + x^2) + 0.87*x', y: 'x*(3*z + 1 - x^2) + 0.87*y', z: '-2*z*(0.1 + x*y)', scale: 0.2, speed: 0.02, spread: 15, center: [0,0,0] },
+            'Tornado (Z-axis curl)': { x: '-y', y: 'x', z: '0.1*z', scale: 1.0, speed: 0.2, spread: 40, center: [0,0,0] },
+            'Horizontal Shear': { x: 'z', y: '0', z: '0', scale: 1.0, speed: 0.2, spread: 40, center: [0,0,0] },
+            'Magnetic Dipole': { x: '3*x*z/pow(x*x+y*y+z*z, 2.5)', y: '3*y*z/pow(x*x+y*y+z*z, 2.5)', z: '(2*z*z-x*x-y*y)/pow(x*x+y*y+z*z, 2.5)', scale: 0.15, speed: 0.005, spread: 25, center: [0,0,0] },
+            'ABC Flow': { x: 'sin(z) + cos(y)', y: 'sin(x) + cos(z)', z: 'sin(y) + cos(x)', scale: 0.5, speed: 0.2, spread: 35, center: [0,0,0] },
+            'Gyroid Flow': { x: 'cos(y)*sin(z)', y: 'cos(z)*sin(x)', z: 'cos(x)*sin(y)', scale: 1.0, speed: 0.2, spread: 40, center: [0,0,0] },
+            'Taylor-Green Vortex': { x: 'sin(x)*cos(y)*cos(z)', y: '-cos(x)*sin(y)*cos(z)', z: '0', scale: 1.0, speed: 0.2, spread: 40, center: [0,0,0] },
+            'Hopf Fibration': { x: '-y + x*z', y: 'x + y*z', z: '1 - x^2 - y^2', scale: 1.5, speed: 0.1, spread: 20, center: [0,0,0] }
         };
 
         function compileField(xStr, yStr, zStr) {
@@ -136,15 +148,14 @@
             }
         }
 
-        // 5. High-Level State Management
         const MAX_BUFFER = 100000;
         const TRAIL_LENGTH = 25; 
         const SEGMENTS = TRAIL_LENGTH - 1;
 
         const state = {
-            mode: 'Accumulation (Fieldplay)', preset: 'Thomas Attractor', 
+            mode: '3D Trails', preset: 'Thomas Attractor', 
             customX: 'sin(y) - 0.19*x', customY: 'sin(z) - 0.19*y', customZ: 'sin(x) - 0.19*z',
-            mathScale: 0.25, // Auto-scales the topology so chaos fits in the viewport
+            mathScale: 0.25, 
             speedDisplay: 0.4, speedRaw: 0.4, 
             lifeDisplay: 800, lifeRaw: 800, 
             densityDisplay: 8000, densityRaw: 8000, 
@@ -182,10 +193,8 @@
         
         currentFieldFunc = compileField(presets[state.preset]?.x || state.customX, presets[state.preset]?.y || state.customY, presets[state.preset]?.z || state.customZ) || compileField(presets['Thomas Attractor'].x, presets['Thomas Attractor'].y, presets['Thomas Attractor'].z);
 
-        // Core Mathematical Wrapper (Applies the topology scaler)
         function evaluateField(x, y, z) {
             const s = state.mathScale;
-            // Stretch the coordinates internally, evaluate, then scale velocity back down
             const v = currentFieldFunc(x * s, y * s, z * s);
             return v.multiplyScalar(1.0 / s);
         }
@@ -202,7 +211,6 @@
             );
         }
 
-        // 6. Mathematical Plane Calculation
         const sliceNormal = new THREE.Vector3(0, 0, 1);
         const slicePlane = new THREE.Plane(sliceNormal, 0);
 
@@ -223,7 +231,6 @@
             }
         }
 
-        // 7. Multi-Segment Geometry Engine
         function createSystem(colorHex) {
             const data = Array.from({ length: MAX_BUFFER }, () => ({
                 pt: new Float32Array(TRAIL_LENGTH * 3), age: 0, maxAge: 0
@@ -259,16 +266,52 @@
         const sysPrimary = createSystem(0x00ccff);
         const sysCurl = createSystem(0xff3333);
 
+        function updateColors(presetName) {
+            const isAttractor = presetName.toLowerCase().includes('attractor');
+            const colorHex = isAttractor ? 0xffd700 : 0x00ccff; // Gold vs Cyan
+            
+            if (sysPrimary.matAccum.color.getHex() === colorHex) return;
+
+            sysPrimary.matAccum.color.setHex(colorHex);
+            const baseColor = new THREE.Color(colorHex);
+            const colors = sysPrimary.lineMesh.geometry.attributes.color.array;
+            
+            let colorOffset = 0;
+            for (let p = 0; p < MAX_BUFFER; p++) {
+                for (let s = 0; s < SEGMENTS; s++) {
+                    const ratioNew = Math.pow(1 - s / SEGMENTS, 2.5); 
+                    const ratioOld = Math.pow(1 - (s + 1) / SEGMENTS, 2.5);
+                    colors[colorOffset++] = baseColor.r * ratioOld; colors[colorOffset++] = baseColor.g * ratioOld; colors[colorOffset++] = baseColor.b * ratioOld;
+                    colors[colorOffset++] = baseColor.r * ratioNew; colors[colorOffset++] = baseColor.g * ratioNew; colors[colorOffset++] = baseColor.b * ratioNew;
+                }
+            }
+            sysPrimary.lineMesh.geometry.attributes.color.needsUpdate = true;
+        }
+
+        updateColors(state.preset);
         let currentScale = 1.0;
 
         function respawnParticle(sys, i, targetX = null, targetY = null, targetZ = null) {
             let px = targetX, py = targetY, pz = targetZ;
             
             if (px === null) {
-                const spread = 40 * currentScale; 
-                px = (Math.random() - 0.5) * spread;
-                py = (Math.random() - 0.5) * spread;
-                pz = (Math.random() - 0.5) * spread;
+                if (sys === sysCurl) {
+                    // Curl field ignores attractor basins and uniformly populates global space
+                    const spread = 40 * currentScale; 
+                    px = (Math.random() - 0.5) * spread;
+                    py = (Math.random() - 0.5) * spread;
+                    pz = (Math.random() - 0.5) * spread;
+                } else {
+                    // Primary field targets preset-specific basins
+                    const conf = presets[state.preset];
+                    const baseSpread = conf && conf.spread ? conf.spread : 40;
+                    const center = conf && conf.center ? conf.center : [0,0,0];
+
+                    const spread = baseSpread * currentScale; 
+                    px = (center[0] * currentScale) + (Math.random() - 0.5) * spread;
+                    py = (center[1] * currentScale) + (Math.random() - 0.5) * spread;
+                    pz = (center[2] * currentScale) + (Math.random() - 0.5) * spread;
+                }
             }
 
             if (state.sliceEnable) {
@@ -310,7 +353,6 @@
             renderer.clear(true, true, true);
         }
 
-        // 8. Interactive Hover Spawner
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         
@@ -349,23 +391,53 @@
         }
         window.addEventListener('pointermove', handleMouseAction);
 
-        // 9. Local Interactive Probe
         const probeGroup = new THREE.Group();
         scene.add(probeGroup);
         const fieldArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 1, 0x0088ff, 0.2, 0.1); probeGroup.add(fieldArrow);
         const curlArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 1, 0xff3333, 0.2, 0.1); probeGroup.add(curlArrow);
         const paddlewheel = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.04, 16, 1, false), new THREE.MeshBasicMaterial({ color: 0xff8888, wireframe: true, transparent: true, opacity: 0.8 })); probeGroup.add(paddlewheel);
 
-        // 10. GUI Controls
         const gui = new GUI({ width: 340 });
 
         function applyCustomFieldAction() {
             state.preset = 'Custom'; gui.controllersRecursive().forEach(c => c.updateDisplay());
             const f = compileField(state.customX, state.customY, state.customZ);
-            if (f) { currentFieldFunc = f; forceFullRespawn(); saveStateToURL(); }
+            if (f) { currentFieldFunc = f; updateColors(state.preset); forceFullRespawn(); saveStateToURL(); }
         }
 
+        document.getElementById('randomize-btn').addEventListener('click', () => {
+            const keys = Object.keys(presets);
+            let randomKey = keys[Math.floor(Math.random() * keys.length)];
+            
+            while (randomKey === state.preset && keys.length > 1) {
+                randomKey = keys[Math.floor(Math.random() * keys.length)];
+            }
+            
+            state.preset = randomKey;
+            const conf = presets[randomKey];
+            
+            const f = compileField(conf.x, conf.y, conf.z);
+            if (f) {
+                currentFieldFunc = f;
+                state.customX = conf.x; state.customY = conf.y; state.customZ = conf.z;
+                
+                state.mathScale = conf.scale || 1.0;
+                state.speedRaw = conf.speed || 0.2;
+                state.speedDisplay = Math.min(Math.max(state.speedRaw, 0.0), 2.0);
+                state.sliceEnable = false;
+                
+                updatePlane();
+                gui.controllersRecursive().forEach(c => c.updateDisplay());
+                updateColors(state.preset);
+                forceFullRespawn();
+                saveStateToURL();
+            }
+        });
+
         const fCore = gui.addFolder('Core Settings');
+        fCore.add(state, 'primaryOp', 0, 1).name('Primary Field Opacity').onChange(v => { sysPrimary.matTrails.opacity = v; sysPrimary.matAccum.opacity = v; saveStateToURL(); });
+        fCore.add(state, 'curlOp', 0, 1).name('Curl Field Opacity').onChange(v => { sysCurl.matTrails.opacity = v; sysCurl.matAccum.opacity = v; saveStateToURL(); });
+
         fCore.add(state, 'mode', ['Accumulation (Fieldplay)', '3D Trails']).name('Render Mode').onChange(() => {
             const useAccum = state.mode === 'Accumulation (Fieldplay)';
             sysPrimary.lineMesh.material = useAccum ? sysPrimary.matAccum : sysPrimary.matTrails;
@@ -380,23 +452,20 @@
                     currentFieldFunc = f; 
                     state.customX = presets[v].x; state.customY = presets[v].y; state.customZ = presets[v].z; 
                     
-                    // Auto-Scale injection to prevent numerical explosion
                     state.mathScale = presets[v].scale || 1.0;
                     state.speedRaw = presets[v].speed || 0.2;
                     state.speedDisplay = Math.min(Math.max(state.speedRaw, 0.0), 2.0);
-                    
-                    // Disable slicer on preset load to prevent topology destruction
                     state.sliceEnable = false;
                     updatePlane();
 
                     gui.controllersRecursive().forEach(c => c.updateDisplay()); 
                 }
             }
+            updateColors(state.preset);
             forceFullRespawn();
             saveStateToURL();
         });
         
-        // --- OVERRIDE MIDDLEMAN PATTERN ---
         const sliderSpeed = fCore.add(state, 'speedDisplay', 0.0, 2.0).name('Flow Velocity (Slider)').onChange(v => {
             state.speedRaw = v; rawSpeed.updateDisplay(); saveStateToURL();
         });
@@ -417,7 +486,6 @@
         const rawDens = fCore.add(state, 'densityRaw').name('Density (Raw Override)').onChange(v => {
             state.densityDisplay = Math.min(Math.max(v, 100), 20000); sliderDens.updateDisplay(); forceFullRespawn(); saveStateToURL();
         });
-        // ----------------------------------
         
         fCore.add(state, 'mathScale', 0.01, 10.0).name('Topology Scale').onChange(() => { forceFullRespawn(); saveStateToURL(); });
         fCore.add(state, 'hoverSpawn').name('Hover Spawning (Mouse)').onChange(saveStateToURL);
@@ -435,10 +503,6 @@
         const fSlice = gui.addFolder('2D Mathematical Slicer');
         fSlice.add(state, 'sliceEnable').name('Constrain to Plane').onChange(() => { updatePlane(); forceFullRespawn(); saveStateToURL(); });
         fSlice.add(state, 'planeEq').name('Equation f(x,y,z) = 0').onChange(() => { updatePlane(); forceFullRespawn(); saveStateToURL(); });
-
-        const fVis = gui.addFolder('Visibility');
-        fVis.add(state, 'primaryOp', 0, 1).name('Primary Field Opacity').onChange(v => { sysPrimary.matTrails.opacity = v; sysPrimary.matAccum.opacity = v; saveStateToURL(); });
-        fVis.add(state, 'curlOp', 0, 1).name('Curl Field Opacity').onChange(v => { sysCurl.matTrails.opacity = v; sysCurl.matAccum.opacity = v; saveStateToURL(); });
 
         const fProbe = gui.addFolder('Probe Data');
         fProbe.add(state, 'px', -5, 5).name('X').onChange(updateProbe);
@@ -472,7 +536,6 @@
             } else { curlArrow.visible = false; paddlewheel.visible = false; }
         }
 
-        // 11. Unified Render Pipeline
         const clock = new THREE.Clock();
 
         function advectSystem(sys, isCurlField, dt) {
@@ -489,19 +552,23 @@
                 p.age += 1;
                 const pt = p.pt;
 
-                if (p.age >= p.maxAge || Math.abs(pt[0]) > boundLimit || Math.abs(pt[1]) > boundLimit || Math.abs(pt[2]) > boundLimit) {
+                let vel = isCurlField ? calculateCurl(pt[0], pt[1], pt[2]) : evaluateField(pt[0], pt[1], pt[2]);
+                if (state.sliceEnable) vel.projectOnPlane(sliceNormal);
+                
+                const moveX = vel.x * dt;
+                const moveY = vel.y * dt;
+                const moveZ = vel.z * dt;
+                
+                const stepLenSq = moveX*moveX + moveY*moveY + moveZ*moveZ;
+                if (stepLenSq > (25.0 * currentScale * currentScale) || isNaN(stepLenSq) || p.age >= p.maxAge || Math.abs(pt[0]) > boundLimit || Math.abs(pt[1]) > boundLimit || Math.abs(pt[2]) > boundLimit) {
                     respawnParticle(sys, i);
-                } else {
-                    let vel = isCurlField ? calculateCurl(pt[0], pt[1], pt[2]) : evaluateField(pt[0], pt[1], pt[2]);
-                    
-                    if (vel.length() > 60 * currentScale) vel.setLength(60 * currentScale);
-                    if (state.sliceEnable) vel.projectOnPlane(sliceNormal);
-                    
-                    pt.copyWithin(3, 0, (TRAIL_LENGTH - 1) * 3);
-                    pt[0] += vel.x * dt;
-                    pt[1] += vel.y * dt;
-                    pt[2] += vel.z * dt;
+                    continue;
                 }
+
+                pt.copyWithin(3, 0, (TRAIL_LENGTH - 1) * 3);
+                pt[0] += moveX;
+                pt[1] += moveY;
+                pt[2] += moveZ;
 
                 if (isAccum) {
                     sys.positions[i*6] = pt[0]; sys.positions[i*6+1] = pt[1]; sys.positions[i*6+2] = pt[2];
@@ -521,27 +588,33 @@
             for (let i = activeTracers.length - 1; i >= 0; i--) {
                 const t = activeTracers[i];
                 t.age += 1;
-                if (t.age >= t.maxAge || Math.abs(t.pos.x) > 45 * currentScale || Math.abs(t.pos.y) > 45 * currentScale || Math.abs(t.pos.z) > 45 * currentScale) {
+                
+                let vel = evaluateField(t.pos.x, t.pos.y, t.pos.z);
+                if (state.sliceEnable) vel.projectOnPlane(sliceNormal);
+                
+                const moveX = vel.x * dt;
+                const moveY = vel.y * dt;
+                const moveZ = vel.z * dt;
+
+                const stepLenSq = moveX*moveX + moveY*moveY + moveZ*moveZ;
+                if (stepLenSq > (25.0 * currentScale * currentScale) || isNaN(stepLenSq) || t.age >= t.maxAge || Math.abs(t.pos.x) > 45 * currentScale || Math.abs(t.pos.y) > 45 * currentScale || Math.abs(t.pos.z) > 45 * currentScale) {
                     disposeTracer(t);
                     activeTracers.splice(i, 1);
-                } else {
-                    let vel = evaluateField(t.pos.x, t.pos.y, t.pos.z);
-                    if (vel.length() > 60 * currentScale) vel.setLength(60 * currentScale);
-                    if (state.sliceEnable) vel.projectOnPlane(sliceNormal);
-                    
-                    t.pos.x += vel.x * dt; t.pos.y += vel.y * dt; t.pos.z += vel.z * dt;
-                    t.group.position.copy(t.pos);
+                    continue;
+                }
 
-                    const curlVec = calculateCurl(t.pos.x, t.pos.y, t.pos.z);
-                    const cMag = curlVec.length();
-                    
-                    if (cMag > 0.001) {
-                        t.arrow.setDirection(curlVec.clone().normalize());
-                        t.arrow.setLength(Math.min(cMag * 1.5, 4.0 * currentScale), 0.2 * currentScale, 0.1 * currentScale);
-                        t.arrow.visible = true;
-                    } else {
-                        t.arrow.visible = false;
-                    }
+                t.pos.x += moveX; t.pos.y += moveY; t.pos.z += moveZ;
+                t.group.position.copy(t.pos);
+
+                const curlVec = calculateCurl(t.pos.x, t.pos.y, t.pos.z);
+                const cMag = curlVec.length();
+                
+                if (cMag > 0.001) {
+                    t.arrow.setDirection(curlVec.clone().normalize());
+                    t.arrow.setLength(Math.min(cMag * 1.5, 4.0 * currentScale), 0.2 * currentScale, 0.1 * currentScale);
+                    t.arrow.visible = true;
+                } else {
+                    t.arrow.visible = false;
                 }
             }
         }
