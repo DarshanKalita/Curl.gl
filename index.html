@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paddlewheel - Advanced Vector Field Explorer</title>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.js"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #051024; color: #fff; font-family: monospace; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+        #info { position: absolute; top: 10px; left: 10px; z-index: 10; padding: 15px; background: rgba(5, 16, 36, 0.85); border: 1px solid #334; border-radius: 4px; pointer-events: none; }
+        .axes-legend { margin-top: 10px; font-size: 11px; }
+        
+        #math-render-panel { position: absolute; bottom: 20px; left: 10px; background: rgba(5, 16, 36, 0.9); border: 1px solid #445; padding: 15px; border-radius: 6px; font-size: 16px; min-width: 300px; pointer-events: none; }
+        .math-row { margin-bottom: 8px; }
+        .math-label { color: #88aaff; font-weight: bold; font-size: 12px; margin-bottom: 2px; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <strong>Paddlewheel: Field Explorer</strong><br>
+        • Hover on canvas to spawn particles interactively.<br>
+        • Blue: Global Field Flow (A)<br>
+        • Red: Global Curl Flow (∇ × A)<br>
+        <div class="axes-legend">
+            <span style="color:#ff5555">■ X Axis</span> | <span style="color:#55ff55">■ Y Axis</span> | <span style="color:#5555ff">■ Z Axis</span>
+        </div>
+    </div>
+
+    <div id="math-render-panel">
+        <div class="math-label">Parsed Vector Field A(x,y,z)</div>
+        <div id="latex-x" class="math-row"></div>
+        <div id="latex-y" class="math-row"></div>
+        <div id="latex-z" class="math-row"></div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "lil-gui": "https://unpkg.com/lil-gui@0.19.1/dist/lil-gui.esm.min.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GUI } from 'lil-gui';
+
+        // 1. Core Renderer
+        const container = document.getElementById('canvas-container');
+        const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.autoClearColor = false; 
+        container.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000); 
+        camera.up.set(0, 0, 1); 
+        camera.position.set(20, 25, 18); 
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.zoomSpeed = 2.0;
+
+        // 2. Accumulation Fade Plane
+        const fadeScene = new THREE.Scene();
+        const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const fadePlane = new THREE.Mesh(
+            new THREE.PlaneGeometry(2, 2), 
+            new THREE.MeshBasicMaterial({ color: 0x051024, transparent: true, opacity: 0.04, depthTest: false })
+        );
+        fadeScene.add(fadePlane);
+
+        // 3. Environment Group
+        const environmentGroup = new THREE.Group();
+        scene.add(environmentGroup);
+        
+        const baseGrid = new THREE.GridHelper(20, 20, 0x223355, 0x112233);
+        baseGrid.rotation.x = Math.PI / 2; baseGrid.position.z = -0.02;
+        environmentGroup.add(baseGrid);
+        environmentGroup.add(new THREE.AxesHelper(10));
+
+        function createTextSprite(text, color) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.font = 'Bold 48px monospace'; ctx.fillStyle = color;
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, 32, 32);
+            const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
+            sprite.scale.set(0.5, 0.5, 1);
+            return sprite;
+        }
+        environmentGroup.add(createTextSprite('X', '#ff5555').translateOnAxis(new THREE.Vector3(1,0,0), 10.5));
+        environmentGroup.add(createTextSprite('Y', '#55ff55').translateOnAxis(new THREE.Vector3(0,1,0), 10.5));
+        environmentGroup.add(createTextSprite('Z', '#5555ff').translateOnAxis(new THREE.Vector3(0,0,1), 10.5));
+
+        // 4. Mathematical Engine (With Pre-calculated Scales and Timesteps)
+        let currentFieldFunc;
+        const presets = {
+            'Thomas Attractor': { x: 'sin(y) - 0.19*x', y: 'sin(z) - 0.19*y', z: 'sin(x) - 0.19*z', scale: 0.25, speed: 0.4 },
+            'Lorenz Attractor': { x: '10*(y-x)', y: 'x*(28-z)-y', z: 'x*y - (8/3)*z', scale: 1.5, speed: 0.015 },
+            'Aizawa Attractor': { x: '(z-0.7)*x - 3.5*y', y: '3.5*x + (z-0.7)*y', z: '0.6 + 0.95*z - (z^3)/3 - (x^2+y^2)*(1+0.25*z) + 0.1*z*(x^3)', scale: 0.1, speed: 0.06 },
+            'Tornado (Z-axis curl)': { x: '-y', y: 'x', z: '0.1*z', scale: 1.0, speed: 0.2 },
+            'Horizontal Shear': { x: 'z', y: '0', z: '0', scale: 1.0, speed: 0.2 },
+            'Magnetic Dipole': { x: '3*x*z/pow(x*x+y*y+z*z, 2.5)', y: '3*y*z/pow(x*x+y*y+z*z, 2.5)', z: '(2*z*z-x*x-y*y)/pow(x*x+y*y+z*z, 2.5)', scale: 0.15, speed: 0.005 },
+            'ABC Flow': { x: 'sin(z) + cos(y)', y: 'sin(x) + cos(z)', z: 'sin(y) + cos(x)', scale: 0.5, speed: 0.2 }
+        };
+
+        function compileField(xStr, yStr, zStr) {
+            try {
+                const nodeX = math.parse(xStr); const nodeY = math.parse(yStr); const nodeZ = math.parse(zStr);
+                katex.render(`P = ${nodeX.toTex()}`, document.getElementById('latex-x'), { throwOnError: false });
+                katex.render(`Q = ${nodeY.toTex()}`, document.getElementById('latex-y'), { throwOnError: false });
+                katex.render(`R = ${nodeZ.toTex()}`, document.getElementById('latex-z'), { throwOnError: false });
+
+                const formatMath = (str) => str.replace(/\^/g, '**');
+                const ctx = `const sin=Math.sin, cos=Math.cos, tan=Math.tan, exp=Math.exp, abs=Math.abs, pow=Math.pow, sqrt=Math.sqrt, PI=Math.PI, e=Math.E;`;
+                const fnX = new Function('x', 'y', 'z', `${ctx} return ${formatMath(xStr)};`);
+                const fnY = new Function('x', 'y', 'z', `${ctx} return ${formatMath(yStr)};`);
+                const fnZ = new Function('x', 'y', 'z', `${ctx} return ${formatMath(zStr)};`);
+                fnX(1,1,1); fnY(1,1,1); fnZ(1,1,1); 
+                return (x, y, z) => new THREE.Vector3(fnX(x,y,z), fnY(x,y,z), fnZ(x,y,z));
+            } catch (err) {
+                console.error("Syntax Error", err);
+                return null;
+            }
+        }
+
+        // 5. High-Level State Management
+        const MAX_BUFFER = 100000;
+        const TRAIL_LENGTH = 25; 
+        const SEGMENTS = TRAIL_LENGTH - 1;
+
+        const state = {
+            mode: 'Accumulation (Fieldplay)', preset: 'Thomas Attractor', 
+            customX: 'sin(y) - 0.19*x', customY: 'sin(z) - 0.19*y', customZ: 'sin(x) - 0.19*z',
+            mathScale: 0.25, // Auto-scales the topology so chaos fits in the viewport
+            speedDisplay: 0.4, speedRaw: 0.4, 
+            lifeDisplay: 800, lifeRaw: 800, 
+            densityDisplay: 8000, densityRaw: 8000, 
+            hoverSpawn: false,
+            primaryOp: 0.7, curlOp: 0.0,
+            sliceEnable: false, planeEq: 'x + z + 15', 
+            px: 2.0, py: 1.0, pz: 0.0, curlMagDisplay: 0
+        };
+
+        function loadStateFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            for (let key in state) {
+                if (params.has(key)) {
+                    let val = params.get(key);
+                    if (val === 'true') state[key] = true;
+                    else if (val === 'false') state[key] = false;
+                    else if (!isNaN(val) && typeof state[key] === 'number') state[key] = parseFloat(val);
+                    else state[key] = val;
+                }
+            }
+            state.lifeDisplay = Math.min(Math.max(state.lifeRaw, 10), 2000);
+            state.densityDisplay = Math.min(Math.max(state.densityRaw, 100), 20000);
+            state.speedDisplay = Math.min(Math.max(state.speedRaw, 0.0), 2.0);
+        }
+
+        function saveStateToURL() {
+            const params = new URLSearchParams();
+            for (let key in state) {
+                if (key !== 'curlMagDisplay' && key !== 'lifeDisplay' && key !== 'densityDisplay' && key !== 'speedDisplay') params.set(key, state[key]);
+            }
+            window.history.replaceState(null, '', '?' + params.toString());
+        }
+
+        loadStateFromURL();
+        
+        currentFieldFunc = compileField(presets[state.preset]?.x || state.customX, presets[state.preset]?.y || state.customY, presets[state.preset]?.z || state.customZ) || compileField(presets['Thomas Attractor'].x, presets['Thomas Attractor'].y, presets['Thomas Attractor'].z);
+
+        // Core Mathematical Wrapper (Applies the topology scaler)
+        function evaluateField(x, y, z) {
+            const s = state.mathScale;
+            // Stretch the coordinates internally, evaluate, then scale velocity back down
+            const v = currentFieldFunc(x * s, y * s, z * s);
+            return v.multiplyScalar(1.0 / s);
+        }
+
+        function calculateCurl(x, y, z) {
+            const h = 0.001;
+            const FxP = evaluateField(x + h, y, z); const FxM = evaluateField(x - h, y, z);
+            const FyP = evaluateField(x, y + h, z); const FyM = evaluateField(x, y - h, z);
+            const FzP = evaluateField(x, y, z + h); const FzM = evaluateField(x, y, z - h);
+            return new THREE.Vector3(
+                ((FyP.z - FyM.z) - (FzP.y - FzM.y)) / (2 * h),
+                ((FzP.x - FzM.x) - (FxP.z - FxM.z)) / (2 * h),
+                ((FxP.y - FxM.y) - (FyP.x - FyM.x)) / (2 * h)
+            );
+        }
+
+        // 6. Mathematical Plane Calculation
+        const sliceNormal = new THREE.Vector3(0, 0, 1);
+        const slicePlane = new THREE.Plane(sliceNormal, 0);
+
+        function updatePlane() {
+            if (!state.sliceEnable) return;
+            try {
+                const compiled = math.parse(state.planeEq).compile();
+                const D = compiled.evaluate({x:0, y:0, z:0});
+                const nx = compiled.evaluate({x:1, y:0, z:0}) - D;
+                const ny = compiled.evaluate({x:0, y:1, z:0}) - D;
+                const nz = compiled.evaluate({x:0, y:0, z:1}) - D;
+                
+                const length = Math.sqrt(nx*nx + ny*ny + nz*nz);
+                sliceNormal.set(nx/length, ny/length, nz/length);
+                slicePlane.set(sliceNormal, D/length);
+            } catch(e) {
+                console.warn("Invalid Plane Equation.");
+            }
+        }
+
+        // 7. Multi-Segment Geometry Engine
+        function createSystem(colorHex) {
+            const data = Array.from({ length: MAX_BUFFER }, () => ({
+                pt: new Float32Array(TRAIL_LENGTH * 3), age: 0, maxAge: 0
+            }));
+            
+            const positions = new Float32Array(MAX_BUFFER * SEGMENTS * 6);
+            const colors = new Float32Array(MAX_BUFFER * SEGMENTS * 6);
+            const baseColor = new THREE.Color(colorHex);
+
+            let colorOffset = 0;
+            for (let p = 0; p < MAX_BUFFER; p++) {
+                for (let s = 0; s < SEGMENTS; s++) {
+                    const ratioNew = Math.pow(1 - s / SEGMENTS, 2.5); 
+                    const ratioOld = Math.pow(1 - (s + 1) / SEGMENTS, 2.5);
+                    colors[colorOffset++] = baseColor.r * ratioOld; colors[colorOffset++] = baseColor.g * ratioOld; colors[colorOffset++] = baseColor.b * ratioOld;
+                    colors[colorOffset++] = baseColor.r * ratioNew; colors[colorOffset++] = baseColor.g * ratioNew; colors[colorOffset++] = baseColor.b * ratioNew;
+                }
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const matTrails = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: state.primaryOp, depthWrite: false, blending: THREE.AdditiveBlending });
+            const matAccum = new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: state.primaryOp, depthWrite: false, blending: THREE.AdditiveBlending });
+
+            const lineMesh = new THREE.LineSegments(geo, matTrails);
+            scene.add(lineMesh);
+
+            return { data, positions, lineMesh, matTrails, matAccum };
+        }
+
+        const sysPrimary = createSystem(0x00ccff);
+        const sysCurl = createSystem(0xff3333);
+
+        let currentScale = 1.0;
+
+        function respawnParticle(sys, i, targetX = null, targetY = null, targetZ = null) {
+            let px = targetX, py = targetY, pz = targetZ;
+            
+            if (px === null) {
+                const spread = 40 * currentScale; 
+                px = (Math.random() - 0.5) * spread;
+                py = (Math.random() - 0.5) * spread;
+                pz = (Math.random() - 0.5) * spread;
+            }
+
+            if (state.sliceEnable) {
+                const pt = new THREE.Vector3(px, py, pz);
+                slicePlane.projectPoint(pt, pt);
+                px = pt.x; py = pt.y; pz = pt.z;
+            }
+            
+            const p = sys.data[i];
+            for (let j = 0; j < TRAIL_LENGTH; j++) {
+                p.pt[j*3] = px; p.pt[j*3+1] = py; p.pt[j*3+2] = pz;
+            }
+            p.age = 0;
+            p.maxAge = state.lifeRaw + Math.random() * (state.lifeRaw * 0.5);
+        }
+
+        const activeTracers = [];
+        const MAX_TRACERS = 100;
+
+        function disposeTracer(t) {
+            scene.remove(t.group);
+            t.group.children.forEach(c => {
+                if (c.geometry) c.geometry.dispose();
+                if (c.material) c.material.dispose();
+                if (c.line) { c.line.geometry.dispose(); c.line.material.dispose(); }
+                if (c.cone) { c.cone.geometry.dispose(); c.cone.material.dispose(); }
+            });
+        }
+
+        function forceFullRespawn() {
+            const count = Math.min(state.densityRaw, MAX_BUFFER);
+            for(let i=0; i<count; i++) {
+                respawnParticle(sysPrimary, i); respawnParticle(sysCurl, i);
+                sysPrimary.data[i].age = Math.random() * state.lifeRaw; 
+                sysCurl.data[i].age = Math.random() * state.lifeRaw;
+            }
+            activeTracers.forEach(disposeTracer);
+            activeTracers.length = 0;
+            renderer.clear(true, true, true);
+        }
+
+        // 8. Interactive Hover Spawner
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        
+        function handleMouseAction(event) {
+            if (!state.hoverSpawn) return;
+            if (event.target.tagName !== 'CANVAS') return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            
+            const cameraDir = camera.getWorldDirection(new THREE.Vector3());
+            const collisionPlane = state.sliceEnable ? slicePlane : new THREE.Plane(cameraDir, 0); 
+            
+            const target = new THREE.Vector3();
+            if (raycaster.ray.intersectPlane(collisionPlane, target)) {
+                
+                for (let i = 0; i < 15; i++) {
+                    const idxPrimary = Math.floor(Math.random() * Math.min(state.densityRaw, MAX_BUFFER));
+                    const idxCurl = Math.floor(Math.random() * Math.min(state.densityRaw, MAX_BUFFER));
+                    const jitter = 0.5 * currentScale;
+                    respawnParticle(sysPrimary, idxPrimary, target.x + (Math.random()-0.5)*jitter, target.y + (Math.random()-0.5)*jitter, target.z + (Math.random()-0.5)*jitter);
+                    respawnParticle(sysCurl, idxCurl, target.x + (Math.random()-0.5)*jitter, target.y + (Math.random()-0.5)*jitter, target.z + (Math.random()-0.5)*jitter);
+                }
+
+                if (activeTracers.length < MAX_TRACERS && Math.random() < 0.1) {
+                    const tGroup = new THREE.Group();
+                    const cArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 1, 0xff3333, 0.4 * currentScale, 0.15 * currentScale);
+                    tGroup.add(cArrow);
+                    tGroup.position.copy(target);
+                    scene.add(tGroup);
+
+                    activeTracers.push({ group: tGroup, arrow: cArrow, pos: target.clone(), age: 0, maxAge: state.lifeRaw });
+                }
+            }
+        }
+        window.addEventListener('pointermove', handleMouseAction);
+
+        // 9. Local Interactive Probe
+        const probeGroup = new THREE.Group();
+        scene.add(probeGroup);
+        const fieldArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 1, 0x0088ff, 0.2, 0.1); probeGroup.add(fieldArrow);
+        const curlArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 1, 0xff3333, 0.2, 0.1); probeGroup.add(curlArrow);
+        const paddlewheel = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.04, 16, 1, false), new THREE.MeshBasicMaterial({ color: 0xff8888, wireframe: true, transparent: true, opacity: 0.8 })); probeGroup.add(paddlewheel);
+
+        // 10. GUI Controls
+        const gui = new GUI({ width: 340 });
+
+        function applyCustomFieldAction() {
+            state.preset = 'Custom'; gui.controllersRecursive().forEach(c => c.updateDisplay());
+            const f = compileField(state.customX, state.customY, state.customZ);
+            if (f) { currentFieldFunc = f; forceFullRespawn(); saveStateToURL(); }
+        }
+
+        const fCore = gui.addFolder('Core Settings');
+        fCore.add(state, 'mode', ['Accumulation (Fieldplay)', '3D Trails']).name('Render Mode').onChange(() => {
+            const useAccum = state.mode === 'Accumulation (Fieldplay)';
+            sysPrimary.lineMesh.material = useAccum ? sysPrimary.matAccum : sysPrimary.matTrails;
+            sysCurl.lineMesh.material = useAccum ? sysCurl.matAccum : sysCurl.matTrails;
+            forceFullRespawn();
+            saveStateToURL();
+        });
+        fCore.add(state, 'preset', [...Object.keys(presets), 'Custom']).name('Presets').onChange(v => { 
+            if (v !== 'Custom') {
+                const f = compileField(presets[v].x, presets[v].y, presets[v].z);
+                if(f) { 
+                    currentFieldFunc = f; 
+                    state.customX = presets[v].x; state.customY = presets[v].y; state.customZ = presets[v].z; 
+                    
+                    // Auto-Scale injection to prevent numerical explosion
+                    state.mathScale = presets[v].scale || 1.0;
+                    state.speedRaw = presets[v].speed || 0.2;
+                    state.speedDisplay = Math.min(Math.max(state.speedRaw, 0.0), 2.0);
+                    
+                    // Disable slicer on preset load to prevent topology destruction
+                    state.sliceEnable = false;
+                    updatePlane();
+
+                    gui.controllersRecursive().forEach(c => c.updateDisplay()); 
+                }
+            }
+            forceFullRespawn();
+            saveStateToURL();
+        });
+        
+        // --- OVERRIDE MIDDLEMAN PATTERN ---
+        const sliderSpeed = fCore.add(state, 'speedDisplay', 0.0, 2.0).name('Flow Velocity (Slider)').onChange(v => {
+            state.speedRaw = v; rawSpeed.updateDisplay(); saveStateToURL();
+        });
+        const rawSpeed = fCore.add(state, 'speedRaw').name('Velocity (Raw Override)').onChange(v => {
+            state.speedDisplay = Math.min(Math.max(v, 0.0), 2.0); sliderSpeed.updateDisplay(); saveStateToURL();
+        });
+
+        const sliderLife = fCore.add(state, 'lifeDisplay', 10, 2000).name('Trail Life (Slider)').onChange(v => {
+            state.lifeRaw = v; rawLife.updateDisplay(); saveStateToURL();
+        });
+        const rawLife = fCore.add(state, 'lifeRaw').name('Trail Life (Raw Override)').onChange(v => {
+            state.lifeDisplay = Math.min(Math.max(v, 10), 2000); sliderLife.updateDisplay(); forceFullRespawn(); saveStateToURL();
+        });
+
+        const sliderDens = fCore.add(state, 'densityDisplay', 100, 20000).step(100).name('Density (Slider)').onChange(v => {
+            state.densityRaw = v; rawDens.updateDisplay(); forceFullRespawn(); saveStateToURL();
+        });
+        const rawDens = fCore.add(state, 'densityRaw').name('Density (Raw Override)').onChange(v => {
+            state.densityDisplay = Math.min(Math.max(v, 100), 20000); sliderDens.updateDisplay(); forceFullRespawn(); saveStateToURL();
+        });
+        // ----------------------------------
+        
+        fCore.add(state, 'mathScale', 0.01, 10.0).name('Topology Scale').onChange(() => { forceFullRespawn(); saveStateToURL(); });
+        fCore.add(state, 'hoverSpawn').name('Hover Spawning (Mouse)').onChange(saveStateToURL);
+
+        const fCustom = gui.addFolder('CAS Input (Math.js)');
+        fCustom.add(state, 'customX').name('P(x,y,z) =');
+        fCustom.add(state, 'customY').name('Q(x,y,z) =');
+        fCustom.add(state, 'customZ').name('R(x,y,z) =');
+        fCustom.add({ apply: applyCustomFieldAction }, 'apply').name('Compile Field (Shift+Enter)');
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); document.activeElement?.blur(); applyCustomFieldAction(); }
+        });
+
+        const fSlice = gui.addFolder('2D Mathematical Slicer');
+        fSlice.add(state, 'sliceEnable').name('Constrain to Plane').onChange(() => { updatePlane(); forceFullRespawn(); saveStateToURL(); });
+        fSlice.add(state, 'planeEq').name('Equation f(x,y,z) = 0').onChange(() => { updatePlane(); forceFullRespawn(); saveStateToURL(); });
+
+        const fVis = gui.addFolder('Visibility');
+        fVis.add(state, 'primaryOp', 0, 1).name('Primary Field Opacity').onChange(v => { sysPrimary.matTrails.opacity = v; sysPrimary.matAccum.opacity = v; saveStateToURL(); });
+        fVis.add(state, 'curlOp', 0, 1).name('Curl Field Opacity').onChange(v => { sysCurl.matTrails.opacity = v; sysCurl.matAccum.opacity = v; saveStateToURL(); });
+
+        const fProbe = gui.addFolder('Probe Data');
+        fProbe.add(state, 'px', -5, 5).name('X').onChange(updateProbe);
+        fProbe.add(state, 'py', -5, 5).name('Y').onChange(updateProbe);
+        fProbe.add(state, 'pz', -5, 5).name('Z').onChange(updateProbe);
+        const probeReadout = fProbe.add(state, 'curlMagDisplay').name('|∇ × A|').disable();
+
+        function updateProbe() {
+            probeGroup.position.set(state.px, state.py, state.pz);
+            const fieldVec = evaluateField(state.px, state.py, state.pz);
+            const fieldMag = fieldVec.length();
+            
+            if (fieldMag > 0.001) {
+                fieldArrow.setDirection(fieldVec.clone().normalize());
+                fieldArrow.setLength(Math.min(fieldMag * 1.5, 4.0 * currentScale), 0.2 * currentScale, 0.1 * currentScale);
+                fieldArrow.visible = true;
+            } else { fieldArrow.visible = false; }
+
+            const curlVec = calculateCurl(state.px, state.py, state.pz);
+            const rawCurlMag = curlVec.length();
+            state.curlMagDisplay = parseFloat(rawCurlMag.toFixed(3));
+            probeReadout.updateDisplay();
+
+            if (rawCurlMag > 0.001) {
+                const curlDir = curlVec.clone().normalize();
+                curlArrow.setDirection(curlDir);
+                curlArrow.setLength(Math.min(rawCurlMag * 1.5, 4.0 * currentScale), 0.2 * currentScale, 0.1 * currentScale);
+                curlArrow.visible = true;
+                paddlewheel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), curlDir);
+                paddlewheel.visible = true;
+            } else { curlArrow.visible = false; paddlewheel.visible = false; }
+        }
+
+        // 11. Unified Render Pipeline
+        const clock = new THREE.Clock();
+
+        function advectSystem(sys, isCurlField, dt) {
+            const activeCount = Math.min(state.densityRaw, MAX_BUFFER);
+            const isAccum = state.mode === 'Accumulation (Fieldplay)';
+            
+            sys.lineMesh.geometry.setDrawRange(0, isAccum ? activeCount * 2 : activeCount * SEGMENTS * 2);
+            
+            const boundLimit = 45 * currentScale; 
+
+            let posOffset = 0;
+            for (let i = 0; i < activeCount; i++) {
+                const p = sys.data[i];
+                p.age += 1;
+                const pt = p.pt;
+
+                if (p.age >= p.maxAge || Math.abs(pt[0]) > boundLimit || Math.abs(pt[1]) > boundLimit || Math.abs(pt[2]) > boundLimit) {
+                    respawnParticle(sys, i);
+                } else {
+                    let vel = isCurlField ? calculateCurl(pt[0], pt[1], pt[2]) : evaluateField(pt[0], pt[1], pt[2]);
+                    
+                    if (vel.length() > 60 * currentScale) vel.setLength(60 * currentScale);
+                    if (state.sliceEnable) vel.projectOnPlane(sliceNormal);
+                    
+                    pt.copyWithin(3, 0, (TRAIL_LENGTH - 1) * 3);
+                    pt[0] += vel.x * dt;
+                    pt[1] += vel.y * dt;
+                    pt[2] += vel.z * dt;
+                }
+
+                if (isAccum) {
+                    sys.positions[i*6] = pt[0]; sys.positions[i*6+1] = pt[1]; sys.positions[i*6+2] = pt[2];
+                    sys.positions[i*6+3] = pt[3]; sys.positions[i*6+4] = pt[4]; sys.positions[i*6+5] = pt[5];
+                } else {
+                    for (let s = 0; s < SEGMENTS; s++) {
+                        const idxNew = s * 3, idxOld = (s + 1) * 3;       
+                        sys.positions[posOffset++] = pt[idxNew]; sys.positions[posOffset++] = pt[idxNew+1]; sys.positions[posOffset++] = pt[idxNew+2];
+                        sys.positions[posOffset++] = pt[idxOld]; sys.positions[posOffset++] = pt[idxOld+1]; sys.positions[posOffset++] = pt[idxOld+2];
+                    }
+                }
+            }
+            sys.lineMesh.geometry.attributes.position.needsUpdate = true;
+        }
+
+        function updateTracers(dt) {
+            for (let i = activeTracers.length - 1; i >= 0; i--) {
+                const t = activeTracers[i];
+                t.age += 1;
+                if (t.age >= t.maxAge || Math.abs(t.pos.x) > 45 * currentScale || Math.abs(t.pos.y) > 45 * currentScale || Math.abs(t.pos.z) > 45 * currentScale) {
+                    disposeTracer(t);
+                    activeTracers.splice(i, 1);
+                } else {
+                    let vel = evaluateField(t.pos.x, t.pos.y, t.pos.z);
+                    if (vel.length() > 60 * currentScale) vel.setLength(60 * currentScale);
+                    if (state.sliceEnable) vel.projectOnPlane(sliceNormal);
+                    
+                    t.pos.x += vel.x * dt; t.pos.y += vel.y * dt; t.pos.z += vel.z * dt;
+                    t.group.position.copy(t.pos);
+
+                    const curlVec = calculateCurl(t.pos.x, t.pos.y, t.pos.z);
+                    const cMag = curlVec.length();
+                    
+                    if (cMag > 0.001) {
+                        t.arrow.setDirection(curlVec.clone().normalize());
+                        t.arrow.setLength(Math.min(cMag * 1.5, 4.0 * currentScale), 0.2 * currentScale, 0.1 * currentScale);
+                        t.arrow.visible = true;
+                    } else {
+                        t.arrow.visible = false;
+                    }
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            controls.update();
+
+            const camDist = camera.position.length();
+            currentScale = Math.max(0.1, camDist / 15.0);
+            environmentGroup.scale.set(currentScale, currentScale, currentScale);
+            paddlewheel.scale.set(currentScale, currentScale, currentScale);
+
+            const dt = delta * state.speedRaw * 10;
+            advectSystem(sysPrimary, false, dt);
+            advectSystem(sysCurl, true, dt);
+            updateTracers(dt);
+
+            if (paddlewheel.visible) paddlewheel.rotateY(state.curlMagDisplay * delta * 2);
+
+            sysPrimary.lineMesh.visible = state.primaryOp > 0; 
+            sysCurl.lineMesh.visible = state.curlOp > 0;
+
+            if (state.mode === 'Accumulation (Fieldplay)') {
+                renderer.autoClear = false; 
+                renderer.clearDepth(); renderer.render(fadeScene, orthoCamera);
+                renderer.clearDepth(); renderer.render(scene, camera);
+            } else {
+                renderer.autoClear = true; 
+                renderer.clear(true, true, true);
+                renderer.render(scene, camera);
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        updatePlane();
+        forceFullRespawn();
+        updateProbe();
+        animate();
+    </script>
+</body>
+</html>
