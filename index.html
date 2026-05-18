@@ -3,8 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Paddlewheel - Advanced Vector Field Explorer</title>
+    <title>Curl.gl - Advanced Vector Field Explorer</title>
     
+
+<meta property="og:title" content="Curl.gl - Vector Field Explorer">
+<meta property="og:description" content="Interactive 3D fluid dynamics and chaotic attractors.">
+<meta property="og:image" content="./assets/Icon.png">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="icon" type="image/png" sizes="32x32" href="./assets/Icon.png">
+
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.js"></script>
@@ -30,7 +38,7 @@
 </head>
 <body>
     <div id="info">
-        <strong>Paddlewheel: Field Explorer</strong><br>
+        <strong>Curl.gl: Field Explorer</strong><br>
         • Hover on canvas to spawn particles interactively.<br>
         • Primary Flow: Global Field (A)<br>
         • Red Flow: Global Curl (∇ × A)<br>
@@ -160,8 +168,8 @@
             lifeDisplay: 800, lifeRaw: 800, 
             densityDisplay: 8000, densityRaw: 8000, 
             hoverSpawn: false,
-            primaryOp: 0.7, curlOp: 0.0,
-            sliceEnable: false, planeEq: 'x + z + 15', 
+            primaryOp: 0.7, curlOp: 0.4,
+            sliceEnable: false, planeEq: 'x + z', 
             px: 2.0, py: 1.0, pz: 0.0, curlMagDisplay: 0
         };
 
