@@ -3,6 +3,7 @@ A tool to help visualize vector fields and their curl.
 
 *Heavily inspired by [Andrei Kashcha's Fieldplay](https://github.com/anvaka/fieldplay).*
 
+Examples: 
 ![Thomas](./assets/Thomas.gif)
 ![Aizawa](./assets/Aizawa.gif)
 ![Rabinovich-Fabrikrant](./assets/Rabinovich-Fabrikant.gif)
