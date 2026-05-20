@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VectoGL - Vector Field Simulator</title>
+    <title>VectoGL - Vector Field Explorer</title>
     
-    <meta property="og:title" content="VectoGL - Vector Field Simulator">
-    <meta property="og:description" content="Interactive 3D field and curl visualiser.">
+    <meta property="og:title" content="VectoGL - Vector Field Explorer">
+    <meta property="og:description" content="Interactive 3D fluid dynamics and chaotic attractors.">
     <meta property="og:url" content="https://darshankalita.github.io/vectogl/">
     <meta property="og:type" content="website">
     <meta property="og:image" content="https://darshankalita.github.io/vectogl/assets/Icon.png?v=6">
@@ -44,8 +44,9 @@
 
         /* --- MOBILE RESPONSIVE QUERIES --- */
         @media (max-width: 768px) {
-            #info { padding: 10px; font-size: 11px; max-width: calc(100vw - 60px); }
-            .axes-legend { display: none; } /* Hide secondary info to save space */
+            /* Guard rail to prevent overlap with the menu button */
+            #info { padding: 10px; font-size: 11px; max-width: calc(100vw - 100px); } 
+            .axes-legend { display: none; } 
             
             #math-render-panel { 
                 bottom: 10px; left: 10px; right: 10px; 
@@ -54,13 +55,22 @@
             }
             .action-btn { font-size: 12px; padding: 10px 8px; }
             .icon-btn { padding: 10px; }
+
+            /* Overriding lil-gui to shrink to a tiny button when closed */
+            .lil-gui.root.closed {
+                width: 75px !important;
+                transition: width 0.2s ease-out;
+            }
+            .lil-gui.root:not(.closed) {
+                transition: width 0.2s ease-out;
+            }
         }
     </style>
 </head>
 <body>
     <div id="info">
         <strong>VectoGL: Field Explorer</strong><br>
-        • Hover or drag to spawn particles.<br>
+        • Hover or tap to spawn particles.<br>
         • Primary Flow: Global Field (A)<br>
         • Red Flow: Global Curl (∇ × A)<br>
         <div class="axes-legend">
@@ -423,8 +433,6 @@
                 }
             }
         }
-        
-        // Added pointerdown to ensure clean touch-spawning on mobile devices
         window.addEventListener('pointermove', handleMouseAction);
         window.addEventListener('pointerdown', handleMouseAction);
 
@@ -434,9 +442,8 @@
         const curlArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 1, 0xff3333, 0.2, 0.1); probeGroup.add(curlArrow);
         const paddlewheel = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.04, 16, 1, false), new THREE.MeshBasicMaterial({ color: 0xff8888, wireframe: true, transparent: true, opacity: 0.8 })); probeGroup.add(paddlewheel);
 
-        // --- GUI Configuration (Mobile Auto-Collapse) ---
         const guiWidth = window.innerWidth > 768 ? 340 : window.innerWidth - 20;
-        const gui = new GUI({ width: guiWidth });
+        const gui = new GUI({ width: guiWidth, title: 'Menu' });
         if (window.innerWidth <= 768) {
             gui.close();
         }
@@ -453,7 +460,6 @@
             }
         }
 
-        // --- INLINE UTILITY BUTTONS ---
         document.getElementById('share-btn').addEventListener('click', (e) => {
             saveStateToURL();
             navigator.clipboard.writeText(window.location.href).then(() => {
@@ -466,7 +472,7 @@
 
         document.getElementById('screenshot-btn').addEventListener('click', () => {
             const link = document.createElement('a');
-            link.download = `VectoGL-${state.preset.replace(/\s+/g, '-')}.png`;
+            link.download = `CurlGL-${state.preset.replace(/\s+/g, '-')}.png`;
             link.href = renderer.domElement.toDataURL('image/png');
             link.click();
         });
